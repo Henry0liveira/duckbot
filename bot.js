@@ -14,6 +14,8 @@ const qrcodeImage = require("qrcode");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const fs = require("fs");
 const path = require("path");
+const http = require("http");
+const https = require("https");
 const express = require("express");
 require("dotenv").config();
 
@@ -697,9 +699,10 @@ log("INFO", `Versão do Node.js: ${process.version}`);
 log("INFO", `Plataforma: ${process.platform}`);
 
 // Inicia servidor HTTP PRIMEIRO (antes do bot WhatsApp)
-const server = app.listen(PORT, () => {
-  log("INFO", `Servidor web rodando em porta ${PORT}`);
-  console.log(`📱 Acesse: https://duckbot-production-7c2d.up.railway.app para ver o QR Code\n`);
+// Escuta em 0.0.0.0 para funcionar corretamente no Fly.io
+const server = app.listen(PORT, "0.0.0.0", () => {
+  log("INFO", `Servidor web rodando em 0.0.0.0:${PORT}`);
+  console.log(`📱 Acesse: https://duckbot.fly.dev para ver o QR Code\n`);
   
   // Agora tenta inicializar o bot WhatsApp em background
   initializeClient().catch((error) => {
@@ -707,16 +710,16 @@ const server = app.listen(PORT, () => {
   });
 });
 
-// Keep-alive: previne que plataformas free tier (Railway, Fly.io, Render) adormeçam o container
-// Faz um self-ping a cada 14 minutos
+// Keep-alive: previne que plataformas free tier adormeçam o container
+// Fly.io já tem auto_stop_machines = 'off', mas o ping garante que o processo está saudável
 const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
 setInterval(() => {
-  const http = require("http");
   const url = new URL("/health", APP_URL);
-  const req = url.protocol === "https:"
-    ? require("https").get(url.toString(), (res) => { res.resume(); })
-    : http.get(url.toString(), (res) => { res.resume(); });
-  req.on("error", () => {}); // ignora falhas silenciosamente
+  const transport = url.protocol === "https:" ? https : http;
+  const req = transport.get(url.toString(), (res) => { res.resume(); });
+  req.on("error", (err) => {
+    log("WARN", `Keep-alive ping falhou: ${err.message}`);
+  });
 }, 14 * 60 * 1000);
 
 // Trata erros do servidor
