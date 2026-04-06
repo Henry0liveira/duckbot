@@ -1,0 +1,44 @@
+# fly.toml app configuration file generated for duckbot-flyio
+
+app = "duckbot-flyio"
+primary_region = "gru"  # São Paulo, BR
+console_command = "/bin/sh"
+
+[build]
+  builder = "heroku/buildpacks:20"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 3000
+  processes = ["app"]
+
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 1000
+    soft_limit = 600
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [services.tcp_checks]
+    interval = "15s"
+    timeout = "5s"
+
+[checks]
+  [checks.alive]
+    type = "http"
+    interval = "30s"
+    timeout = "10s"
+    grace_period = "60s"
+    method = "get"
+    path = "/api/status"
