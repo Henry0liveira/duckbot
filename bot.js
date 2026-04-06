@@ -706,17 +706,23 @@ console.log("\n🦆 DUCK DEBUG BOT — Iniciando...\n");
 log("INFO", `Versão do Node.js: ${process.version}`);
 log("INFO", `Plataforma: ${process.platform}`);
 
-// Inicia servidor HTTP para QR code
-app.listen(PORT, () => {
+// Inicia servidor HTTP PRIMEIRO (antes do bot WhatsApp)
+const server = app.listen(PORT, () => {
   log("INFO", `Servidor web rodando em porta ${PORT}`);
-  console.log(`📱 Acesse: http://localhost:${PORT} para ver o QR Code\n`);
+  console.log(`📱 Acesse: https://duckbot-production-7c2d.up.railway.app para ver o QR Code\n`);
+  
+  // Agora tenta inicializar o bot WhatsApp em background
+  initializeClient().then(() => {
+    setupMessageListener();
+    log("INFO", "Message listener configurado");
+  }).catch((error) => {
+    log("ERROR", `Erro ao inicializar cliente: ${error.message}`);
+  });
 });
 
-initializeClient().then(() => {
-  setupMessageListener();
-  log("INFO", "Message listener configurado");
-}).catch((error) => {
-  log("ERROR", `Erro fatal na inicialização: ${error.message}`);
+// Trata erros do servidor
+server.on("error", (error) => {
+  log("ERROR", `Erro do servidor: ${error.message}`);
   process.exit(1);
 });
 
