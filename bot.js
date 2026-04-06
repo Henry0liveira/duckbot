@@ -550,7 +550,6 @@ function createClient() {
   newClient.on("qr", (qr) => {
     currentQR = qr; // Armazena para servir via HTTP
     console.log("\n[QR] Escaneie o QR Code no WhatsApp\n");
-    qrcode.generate(qr, { small: true });
     log("INFO", "QR Code gerado — aguardando escaneamento");
     reconnectAttempts = 0; // Reset tentativas ao gerar novo QR
   });
