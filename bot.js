@@ -10,9 +10,12 @@
 
 const { Client, LocalAuth, MessageMedia } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
+const qrcodeImage = require("qrcode");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const fs = require("fs");
 const path = require("path");
+const express = require("express");
+require("dotenv").config();
 
 let chromeExecutablePath = process.env.CHROME_PATH;
 if (!chromeExecutablePath) {
@@ -27,11 +30,12 @@ if (!chromeExecutablePath) {
 }
 
 // --- CONFIG ---
-const GEMINI_API_KEY = "AIzaSyAFQh9a0niBu39BYd8AV1y1SkIdHi-I51E";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyAFQh9a0niBu39BYd8AV1y1SkIdHi-I51E";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const LOG_FILE = path.join(__dirname, "logs.json");
 const SESSIONS_FILE = path.join(__dirname, "sessions.json");
 const PROPOSALS_FILE = path.join(__dirname, "proposals.json");
+const PORT = process.env.PORT || 3000;
 
 // --- RECONNECTION CONFIG ---
 const RECONNECT_CONFIG = {
@@ -45,6 +49,10 @@ const RECONNECT_CONFIG = {
 let client = null;
 let reconnectAttempts = 0;
 let lastError = null;
+let currentQR = null; // Armazena o QR code atual
+
+// --- EXPRESS SERVER ---
+const app = express();
 
 // Personalidade da Duck Debug
 const SYSTEM_PROMPT = `Você é o DuckBot, assistente virtual da Duck Debug — uma consultoria de tecnologia especializada em resolver problemas complexos com clareza, lógica e pensamento estruturado.
@@ -82,6 +90,157 @@ INSTRUÇÕES DE COMPORTAMENTO:
 - Se a pergunta for técnica, responda com clareza e ofereça aprofundamento
 - Sempre termine oferecendo próximo passo ou perguntando se pode ajudar mais
 - Quando o usuário quiser falar com humano, diga para enviar email ou aguardar contato`;
+
+// --- EXPRESS ROUTES ---
+app.use(express.static(__dirname));
+
+// Página inicial com QR code
+app.get("/", (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DuckBot — QR Code</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: linear-gradient(135deg, #111111 0%, #1a1a1a 100%);
+      font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      color: #f0f0f0;
+    }
+    .container {
+      text-align: center;
+      background: rgba(26,26,26,0.8);
+      border: 1px solid rgba(255,199,44,0.2);
+      padding: 2rem;
+      border-radius: 8px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+    }
+    h1 {
+      margin-top: 0;
+      color: #FFC72C;
+      font-size: 1.8rem;
+    }
+    .status {
+      padding: 1rem;
+      background: rgba(74,222,128,0.1);
+      border-left: 3px solid #4ade80;
+      margin: 1rem 0;
+      text-align: left;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+    }
+    .qr-container {
+      margin: 2rem 0;
+      padding: 1rem;
+      background: white;
+      border-radius: 8px;
+      display: inline-block;
+    }
+    img {
+      max-width: 300px;
+      width: 100%;
+      height: auto;
+    }
+    .info {
+      font-size: 13px;
+      color: #888;
+      margin-top: 1rem;
+    }
+    .links {
+      margin-top: 2rem;
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    a {
+      padding: 8px 16px;
+      background: #FFC72C;
+      color: #111;
+      text-decoration: none;
+      border-radius: 4px;
+      font-weight: 600;
+      font-size: 12px;
+      transition: all 0.2s;
+    }
+    a:hover {
+      background: #FFE166;
+      transform: translateY(-2px);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🦆 DuckBot</h1>
+    <div class="status">
+      <strong>Status:</strong> <span id="status">Carregando...</span>
+    </div>
+    
+    <div class="qr-container">
+      <img id="qrImage" src="/api/qr" alt="QR Code">
+    </div>
+    
+    <p class="info">Escaneie o QR Code com seu WhatsApp para autenticar o bot.</p>
+    <p class="info">O QR Code é atualizado a cada 3 segundos.</p>
+    
+    <div class="links">
+      <a href="/painel.html">📊 Painel de Controle</a>
+    </div>
+  </div>
+
+  <script>
+    // Atualiza QR code a cada 3 segundos
+    setInterval(() => {
+      document.getElementById('qrImage').src = '/api/qr?t=' + Date.now();
+    }, 3000);
+
+    // Verifica status do bot
+    setInterval(() => {
+      fetch('/api/status')
+        .then(r => r.json())
+        .then(d => {
+          document.getElementById('status').textContent = d.status;
+          document.getElementById('status').style.color = d.status === 'Online' ? '#4ade80' : '#f87171';
+        })
+        .catch(() => {
+          document.getElementById('status').textContent = 'Offline';
+          document.getElementById('status').style.color = '#f87171';
+        });
+    }, 5000);
+  </script>
+</body>
+</html>`);
+});
+
+// API para retornar o QR code como imagem
+app.get("/api/qr", async (req, res) => {
+  if (!currentQR) {
+    return res.status(400).json({ error: "QR Code não gerado ainda" });
+  }
+  try {
+    const qrImage = await qrcodeImage.toDataURL(currentQR, { width: 300 });
+    const base64Data = qrImage.replace(/^data:image\/png;base64,/, "");
+    res.set("Content-Type", "image/png");
+    res.send(Buffer.from(base64Data, "base64"));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// API para status do bot
+app.get("/api/status", (req, res) => {
+  const status = client && client.info ? "Online" : "Offline";
+  res.json({ status });
+});
 
 // --- INIT ---
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
@@ -389,6 +548,7 @@ function createClient() {
 
   // QR Code
   newClient.on("qr", (qr) => {
+    currentQR = qr; // Armazena para servir via HTTP
     console.log("\n[QR] Escaneie o QR Code no WhatsApp\n");
     qrcode.generate(qr, { small: true });
     log("INFO", "QR Code gerado — aguardando escaneamento");
@@ -545,6 +705,12 @@ function setupMessageListener() {
 console.log("\n🦆 DUCK DEBUG BOT — Iniciando...\n");
 log("INFO", `Versão do Node.js: ${process.version}`);
 log("INFO", `Plataforma: ${process.platform}`);
+
+// Inicia servidor HTTP para QR code
+app.listen(PORT, () => {
+  log("INFO", `Servidor web rodando em porta ${PORT}`);
+  console.log(`📱 Acesse: http://localhost:${PORT} para ver o QR Code\n`);
+});
 
 initializeClient().then(() => {
   setupMessageListener();
