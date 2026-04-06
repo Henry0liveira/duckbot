@@ -39,7 +39,7 @@ const PORT = process.env.PORT || 3000;
 
 // --- RECONNECTION CONFIG ---
 const RECONNECT_CONFIG = {
-  maxRetries: 5,
+  maxRetries: Infinity, // Tenta para sempre — bot 24/7
   initialDelay: 5000, // 5 segundos
   maxDelay: 60000, // 1 minuto
   backoffMultiplier: 2,
@@ -240,6 +240,11 @@ app.get("/api/qr", async (req, res) => {
 app.get("/api/status", (req, res) => {
   const status = client && client.info ? "Online" : "Offline";
   res.json({ status });
+});
+
+// Health check para manter o container vivo (Railway, Fly.io, Render, etc.)
+app.get("/health", (req, res) => {
+  res.status(200).json({ ok: true, uptime: process.uptime() });
 });
 
 // --- INIT ---
@@ -644,23 +649,14 @@ let reconnectionTimeout = null;
 function scheduleReconnection() {
   if (reconnectionTimeout) clearTimeout(reconnectionTimeout);
 
-  if (reconnectAttempts >= RECONNECT_CONFIG.maxRetries) {
-    log("ERROR", `Limite de reconexões atingido (${RECONNECT_CONFIG.maxRetries}). Aguardando 5 minutos antes de tentar novamente...`);
-    reconnectAttempts = 0;
-    reconnectionTimeout = setTimeout(() => {
-      reconnectAttempts = 0;
-      scheduleReconnection();
-    }, 5 * 60 * 1000); // Aguarda 5 minutos
-    return;
-  }
+  reconnectAttempts++;
 
   const delay = Math.min(
-    RECONNECT_CONFIG.initialDelay * Math.pow(RECONNECT_CONFIG.backoffMultiplier, reconnectAttempts),
+    RECONNECT_CONFIG.initialDelay * Math.pow(RECONNECT_CONFIG.backoffMultiplier, reconnectAttempts - 1),
     RECONNECT_CONFIG.maxDelay
   );
 
-  reconnectAttempts++;
-  log("INFO", `Tentando reconectar em ${delay / 1000}s (tentativa ${reconnectAttempts}/${RECONNECT_CONFIG.maxRetries})`);
+  log("INFO", `Tentando reconectar em ${delay / 1000}s (tentativa ${reconnectAttempts})`);
 
   reconnectionTimeout = setTimeout(() => {
     initializeClient();
@@ -711,15 +707,42 @@ const server = app.listen(PORT, () => {
   });
 });
 
+// Keep-alive: previne que plataformas free tier (Railway, Fly.io, Render) adormeçam o container
+// Faz um self-ping a cada 14 minutos
+const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
+setInterval(() => {
+  const http = require("http");
+  const url = new URL("/health", APP_URL);
+  const req = url.protocol === "https:"
+    ? require("https").get(url.toString(), (res) => { res.resume(); })
+    : http.get(url.toString(), (res) => { res.resume(); });
+  req.on("error", () => {}); // ignora falhas silenciosamente
+}, 14 * 60 * 1000);
+
 // Trata erros do servidor
 server.on("error", (error) => {
   log("ERROR", `Erro do servidor: ${error.message}`);
-  process.exit(1);
+  // Só sai se a porta já estiver em uso (erro irrecuperável)
+  if (error.code === "EADDRINUSE") {
+    process.exit(1);
+  }
 });
 
-// Graceful shutdown
+// Graceful shutdown (Ctrl+C)
 process.on("SIGINT", () => {
   log("INFO", "Bot encerrado pelo usuário");
+  if (reconnectionTimeout) clearTimeout(reconnectionTimeout);
+  saveStats();
+  if (client) {
+    client.destroy().finally(() => process.exit(0));
+  } else {
+    process.exit(0);
+  }
+});
+
+// Graceful shutdown em containers Docker/Railway/Fly.io
+process.on("SIGTERM", () => {
+  log("INFO", "Bot recebeu SIGTERM — encerrando graciosamente");
   if (reconnectionTimeout) clearTimeout(reconnectionTimeout);
   saveStats();
   if (client) {
@@ -739,7 +762,10 @@ process.on("uncaughtException", (error) => {
   lastError = error;
   if (client) {
     client.destroy().catch(() => {});
+    client = null;
   }
+  // Reagenda reconexão para manter o bot 24/7
+  scheduleReconnection();
 });
 
 
