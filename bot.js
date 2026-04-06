@@ -581,6 +581,60 @@ function createClient() {
     scheduleReconnection();
   });
 
+  // --- MESSAGE HANDLER ---
+  newClient.on("message", async (message) => {
+    // Ignora grupos e status
+    if (message.from.includes("@g.us")) return;
+    if (message.from === "status@broadcast") return;
+    if (message.fromMe) return;
+
+    const contact = await message.getContact();
+    const userName = contact.pushname || contact.name || "Cliente";
+    const userNumber = message.from;
+    const userMessage = message.body;
+
+    log("MSG", `Nova mensagem de ${userName} (${userNumber}): ${userMessage.substring(0, 50)}`);
+
+    // Atualiza stats
+    stats.totalMessages++;
+    stats.totalContacts.add(userNumber);
+    const hourKey = getHourKey();
+    stats.messagesPerHour[hourKey] = (stats.messagesPerHour[hourKey] || 0) + 1;
+    stats.lastMessages.unshift({
+      time: new Date().toISOString(),
+      name: userName,
+      number: userNumber.replace("@c.us", ""),
+      message: userMessage.substring(0, 100),
+    });
+    if (stats.lastMessages.length > 50) stats.lastMessages = stats.lastMessages.slice(0, 50);
+    saveStats();
+
+    try {
+      // Indicador de digitando
+      await newClient.sendPresenceAvailable();
+
+      // Tenta resposta rápida primeiro
+      const quickReply = getQuickReply(userNumber, userName, userMessage);
+
+      if (quickReply) {
+        await message.reply(quickReply);
+        log("INFO", `Resposta rápida enviada para ${userName}`);
+      } else {
+        // --- GEMINI ---
+        const aiResponse = await askGemini(userNumber, userName, userMessage);
+        await message.reply(aiResponse);
+        log("INFO", `Resposta Gemini enviada para ${userName}`);
+      }
+    } catch (error) {
+      log("ERROR", `Erro ao responder ${userName}: ${error.message}`);
+      try {
+        await message.reply(
+          "🦆 Tive um probleminha técnico! Entre em contato pelo email contato@duckdebug.com"
+        );
+      } catch {}
+    }
+  });
+
   return newClient;
 }
 
@@ -641,65 +695,6 @@ async function initializeClient() {
   }
 }
 
-// --- MESSAGE HANDLER ---
-// Essa função será chamada sempre que setupMessageListener() for executada
-function setupMessageListener() {
-  if (!client) return;
-  
-  client.on("message", async (message) => {
-    // Ignora grupos e status
-    if (message.from.includes("@g.us")) return;
-    if (message.from === "status@broadcast") return;
-    if (message.fromMe) return;
-
-    const contact = await message.getContact();
-    const userName = contact.pushname || contact.name || "Cliente";
-    const userNumber = message.from;
-    const userMessage = message.body;
-
-    log("MSG", `Nova mensagem de ${userName} (${userNumber}): ${userMessage.substring(0, 50)}`);
-
-    // Atualiza stats
-    stats.totalMessages++;
-    stats.totalContacts.add(userNumber);
-    const hourKey = getHourKey();
-    stats.messagesPerHour[hourKey] = (stats.messagesPerHour[hourKey] || 0) + 1;
-    stats.lastMessages.unshift({
-      time: new Date().toISOString(),
-      name: userName,
-      number: userNumber.replace("@c.us", ""),
-      message: userMessage.substring(0, 100),
-    });
-    if (stats.lastMessages.length > 50) stats.lastMessages = stats.lastMessages.slice(0, 50);
-    saveStats();
-
-    try {
-      // Indicador de digitando
-      await client.sendPresenceAvailable();
-
-      // Tenta resposta rápida primeiro
-      const quickReply = getQuickReply(userNumber, userName, userMessage);
-
-      if (quickReply) {
-        await message.reply(quickReply);
-        log("INFO", `Resposta rápida enviada para ${userName}`);
-      } else {
-        // --- GEMINI ---
-        const aiResponse = await askGemini(userNumber, userName, userMessage);
-        await message.reply(aiResponse);
-        log("INFO", `Resposta Gemini enviada para ${userName}`);
-      }
-    } catch (error) {
-      log("ERROR", `Erro ao responder ${userName}: ${error.message}`);
-      try {
-        await message.reply(
-          "🦆 Tive um probleminha técnico! Entre em contato pelo email contato@duckdebug.com"
-        );
-      } catch {}
-    }
-  });
-}
-
 // --- START ---
 console.log("\n🦆 DUCK DEBUG BOT — Iniciando...\n");
 log("INFO", `Versão do Node.js: ${process.version}`);
@@ -711,10 +706,7 @@ const server = app.listen(PORT, () => {
   console.log(`📱 Acesse: https://duckbot-production-7c2d.up.railway.app para ver o QR Code\n`);
   
   // Agora tenta inicializar o bot WhatsApp em background
-  initializeClient().then(() => {
-    setupMessageListener();
-    log("INFO", "Message listener configurado");
-  }).catch((error) => {
+  initializeClient().catch((error) => {
     log("ERROR", `Erro ao inicializar cliente: ${error.message}`);
   });
 });
