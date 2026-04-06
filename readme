@@ -1,0 +1,125 @@
+# 🦆 Duck Debug — WhatsApp Bot
+
+Bot de atendimento automatizado para o WhatsApp da Duck Debug, alimentado pelo Gemini AI.
+
+---
+
+## ✅ PRÉ-REQUISITOS
+
+- Node.js 18+ instalado
+- Google Chrome ou Chromium instalado (para o Puppeteer)
+- Número de WhatsApp exclusivo para o bot (pode ser chip de R$10/mês)
+
+---
+
+## 🚀 INSTALAÇÃO (5 minutos)
+
+### 1. Instale as dependências
+
+```bash
+npm install
+```
+
+> ⚠️ A instalação baixa o Chromium automaticamente (~170MB). Pode demorar alguns minutos.
+
+### 2. Inicie o bot
+
+```bash
+npm start
+```
+
+### 3. Escaneie o QR Code
+
+No terminal vai aparecer um QR Code. Abra o WhatsApp no celular:
+- **Android:** Três pontos > Aparelhos conectados > Conectar aparelho
+- **iPhone:** Configurações > Aparelhos conectados > Conectar aparelho
+
+Escaneie o código. Pronto! 🎉
+
+---
+
+## 💰 CUSTO PRATICAMENTE ZERO
+
+| Item | Custo |
+|------|-------|
+| Gemini 1.5 Flash API | **Grátis** (15 req/min, 1M tokens/dia) |
+| whatsapp-web.js | **Grátis** (open-source) |
+| Hospedagem | **Grátis** em Oracle Cloud Free Tier ou R$20/mês VPS |
+| Chip WhatsApp | ~R$10/mês |
+
+**Total estimado: R$10 a R$30/mês**
+
+---
+
+## 🌐 PAINEL DE CONTROLE
+
+Abra o arquivo `painel.html` em um servidor local para ver o dashboard:
+
+```bash
+# Opção simples com Python:
+python3 -m http.server 3000
+
+# Depois abra: http://localhost:3000/painel.html
+```
+
+---
+
+## ☁️ HOSPEDAGEM GRATUITA — Oracle Cloud
+
+1. Crie conta em cloud.oracle.com (sempre gratuito)
+2. Crie VM Ubuntu 22.04 (ARM, 4 OCPUs, 24GB RAM — tudo grátis)
+3. Conecte via SSH e instale o bot:
+
+```bash
+# Instala Node.js
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# Instala dependências do Puppeteer
+sudo apt-get install -y chromium-browser
+
+# Clona/sobe os arquivos e instala
+npm install
+
+# Roda em background com PM2
+npm install -g pm2
+pm2 start bot.js --name "duck-bot"
+pm2 startup  # Auto-iniciar no boot
+pm2 save
+```
+
+---
+
+## ⚙️ PERSONALIZAÇÃO
+
+Para alterar o comportamento do bot, edite o `SYSTEM_PROMPT` no `bot.js`:
+- Ajuste os serviços oferecidos
+- Mude o tom de comunicação
+- Adicione respostas automáticas no `getQuickReply()`
+
+---
+
+## 🔧 COMANDOS RÁPIDOS (sem consumir API)
+
+O bot responde automaticamente, sem chamar o Gemini, para:
+- `oi`, `olá`, `hello` → Menu principal
+- `1` ou `serviços` → Lista de serviços
+- `2` ou `projetos` → Cases realizados
+- `3` ou `orçamento` → Solicitar proposta
+- `4` ou `contato` → Informações de contato
+- `tchau`, `obrigado` → Despedida
+
+---
+
+## ⚠️ IMPORTANTE
+
+- **Troque a API key do Gemini** após uso (está exposta no código)
+- Use um número de WhatsApp **exclusivo** para o bot (não o pessoal)
+- O WhatsApp pode banir números que enviam mensagens em massa — o bot só responde, não dispara
+- Faça backup do diretório `.wwebjs_auth` (contém a sessão autenticada)
+
+---
+
+## 📧 Suporte
+
+contato@duckdebug.com

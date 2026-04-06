@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.local
+.wwebjs_auth/
+logs.json
+sessions.json
+proposals.json
+*.log
+npm-debug.log*

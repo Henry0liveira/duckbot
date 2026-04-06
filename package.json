@@ -1,0 +1,23 @@
+{
+  "name": "duck-debug-whatsapp-bot",
+  "version": "1.0.0",
+  "description": "WhatsApp Bot da Duck Debug powered by Gemini AI",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "nodemon bot.js",
+    "panel": "node panel.js"
+  },
+  "dependencies": {
+    "whatsapp-web.js": "^1.23.0",
+    "qrcode-terminal": "^0.12.0",
+    "@google/generative-ai": "^0.21.0",
+    "puppeteer": "^23.8.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
