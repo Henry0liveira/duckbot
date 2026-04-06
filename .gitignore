@@ -1,5 +1,4 @@
 node_modules/
-.env
 .env.local
 # .wwebjs_auth/  ← Comentado para permitir commit da sessão autenticada
 logs.json
