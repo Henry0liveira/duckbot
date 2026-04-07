@@ -47,8 +47,10 @@ RUN apt-get update -qq && \
 COPY --from=build /app /app
 
 # Diretórios persistentes para sessão e cache do WhatsApp
+# chmod 777 garante escrita pelo usuário node mesmo após o volume ser montado
+# (volumes sobrescrevem permissões definidas via chown no build)
 RUN mkdir -p /app/.wwebjs_auth /app/.wwebjs_cache && \
-    chown -R node:node /app
+    chmod 777 /app/.wwebjs_auth /app/.wwebjs_cache
 
 USER node
 
