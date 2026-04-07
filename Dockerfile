@@ -1,45 +1,61 @@
 # syntax = docker/dockerfile:1
 
-# Adjust NODE_VERSION as desired
-ARG NODE_VERSION=22.21.1
+ARG NODE_VERSION=20
 FROM node:${NODE_VERSION}-slim AS base
 
 LABEL fly_launch_runtime="Node.js"
 
-# Node.js app lives here
 WORKDIR /app
-
-# Set production environment
 ENV NODE_ENV="production"
 
-
-# Throw-away build stage to reduce size of final image
+# ── Build stage ──────────────────────────────────────────────────────────────
 FROM base AS build
 
-# Install packages needed to build node modules
 RUN apt-get update -qq && \
-    apt-get install --no-install-recommends -y build-essential node-gyp pkg-config python-is-python3
-
-# Install node modules
-COPY package-lock.json package.json ./
-RUN npm ci
-
-# Copy application code
-COPY . .
-
-
-# Final stage for app image
-FROM base
-
-# Install packages needed for deployment
-RUN apt-get update -qq && \
-    apt-get install --no-install-recommends -y chromium chromium-sandbox && \
+    apt-get install --no-install-recommends -y \
+      build-essential node-gyp pkg-config python-is-python3 && \
     rm -rf /var/lib/apt/lists /var/cache/apt/archives
 
-# Copy built application
+COPY package-lock.json package.json ./
+RUN npm ci --omit=dev
+
+COPY . .
+
+# ── Final stage ───────────────────────────────────────────────────────────────
+FROM base
+
+# Chromium + dependências necessárias para Puppeteer headless
+RUN apt-get update -qq && \
+    apt-get install --no-install-recommends -y \
+      chromium \
+      fonts-noto \
+      fonts-noto-cjk \
+      libnss3 \
+      libatk1.0-0 \
+      libatk-bridge2.0-0 \
+      libcups2 \
+      libdrm2 \
+      libxkbcommon0 \
+      libxcomposite1 \
+      libxdamage1 \
+      libxfixes3 \
+      libxrandr2 \
+      libgbm1 \
+      libasound2 && \
+    rm -rf /var/lib/apt/lists /var/cache/apt/archives
+
 COPY --from=build /app /app
 
-# Start the server by default, this can be overwritten at runtime
+# Diretórios persistentes para sessão e cache do WhatsApp
+RUN mkdir -p /app/.wwebjs_auth /app/.wwebjs_cache && \
+    chown -R node:node /app
+
+USER node
+
 EXPOSE 3000
+
+# Aponta para o Chromium instalado pelo apt
 ENV PUPPETEER_EXECUTABLE_PATH="/usr/bin/chromium"
-CMD [ "npm", "run", "start" ]
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD="true"
+
+CMD ["node", "bot.js"]

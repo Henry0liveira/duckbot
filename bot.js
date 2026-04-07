@@ -1,4 +1,4 @@
-﻿/**
+/**
  * DUCK DEBUG — WhatsApp Bot
  * Powered by Gemini AI
  *
@@ -8,7 +8,7 @@
  * 3. Escaneie o QR Code com o WhatsApp
  */
 
-const { Client, LocalAuth, MessageMedia } = require("whatsapp-web.js");
+const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const qrcodeImage = require("qrcode");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
@@ -19,21 +19,32 @@ const https = require("https");
 const express = require("express");
 require("dotenv").config();
 
-let chromeExecutablePath = process.env.CHROME_PATH;
+// --- BUG FIX #1: Detecção de Chrome melhorada ---
+// Usa PUPPETEER_EXECUTABLE_PATH (padrão Docker) antes de qualquer outra coisa
+let chromeExecutablePath =
+  process.env.PUPPETEER_EXECUTABLE_PATH ||
+  process.env.CHROME_PATH ||
+  null;
+
 if (!chromeExecutablePath) {
   try {
-    // If puppeteer is installed, use its bundled Chromium
     const puppeteer = require("puppeteer");
     chromeExecutablePath = puppeteer.executablePath();
   } catch {
-    // Fallback to system Chrome if available (puppeteer not installed)
     chromeExecutablePath = null;
   }
 }
 
 // --- CONFIG ---
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyAFQh9a0niBu39BYd8AV1y1SkIdHi-I51E";
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+// BUG FIX #2: Chave hard-coded removida — obrigatório via .env
+if (!GEMINI_API_KEY) {
+  console.error("❌ ERRO: GEMINI_API_KEY não definida no .env");
+  process.exit(1);
+}
+
+// BUG FIX #3: gemini-2.5-flash não existe — modelo correto é gemini-1.5-flash
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
 const LOG_FILE = path.join(__dirname, "logs.json");
 const SESSIONS_FILE = path.join(__dirname, "sessions.json");
 const PROPOSALS_FILE = path.join(__dirname, "proposals.json");
@@ -41,20 +52,22 @@ const PORT = process.env.PORT || 3000;
 
 // --- RECONNECTION CONFIG ---
 const RECONNECT_CONFIG = {
-  maxRetries: Infinity, // Tenta para sempre — bot 24/7
-  initialDelay: 5000, // 5 segundos
-  maxDelay: 60000, // 1 minuto
+  maxRetries: Infinity,
+  initialDelay: 5000,
+  maxDelay: 60000,
   backoffMultiplier: 2,
-  puppeteerTimeout: 60000, // 60 segundos para inicializar o browser
+  puppeteerTimeout: 120000, // BUG FIX #4: aumentado para 120s (60s era insuficiente em free tiers)
 };
 
 let client = null;
 let reconnectAttempts = 0;
 let lastError = null;
-let currentQR = null; // Armazena o QR code atual
+let currentQR = null;
+let botStatus = "Inicializando"; // BUG FIX #5: status mais granular para o painel
 
 // --- EXPRESS SERVER ---
 const app = express();
+app.use(express.json());
 
 // Personalidade da Duck Debug
 const SYSTEM_PROMPT = `Você é o DuckBot, assistente virtual da Duck Debug — uma consultoria de tecnologia especializada em resolver problemas complexos com clareza, lógica e pensamento estruturado.
@@ -106,78 +119,46 @@ app.get("/", (req, res) => {
   <title>DuckBot — QR Code</title>
   <style>
     body {
-      margin: 0;
-      padding: 0;
+      margin: 0; padding: 0;
       background: linear-gradient(135deg, #111111 0%, #1a1a1a 100%);
       font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      color: #f0f0f0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      min-height: 100vh; color: #f0f0f0;
     }
     .container {
       text-align: center;
       background: rgba(26,26,26,0.8);
       border: 1px solid rgba(255,199,44,0.2);
-      padding: 2rem;
-      border-radius: 8px;
+      padding: 2rem; border-radius: 8px;
       box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+      max-width: 400px; width: 90%;
     }
-    h1 {
-      margin-top: 0;
-      color: #FFC72C;
-      font-size: 1.8rem;
-    }
+    h1 { margin-top: 0; color: #FFC72C; font-size: 1.8rem; }
     .status {
       padding: 1rem;
       background: rgba(74,222,128,0.1);
       border-left: 3px solid #4ade80;
-      margin: 1rem 0;
-      text-align: left;
+      margin: 1rem 0; text-align: left;
       border-radius: 4px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 13px;
+      font-family: monospace; font-size: 13px;
     }
     .qr-container {
-      margin: 2rem 0;
-      padding: 1rem;
-      background: white;
-      border-radius: 8px;
-      display: inline-block;
+      margin: 2rem 0; padding: 1rem;
+      background: white; border-radius: 8px;
+      display: inline-block; min-height: 120px;
     }
-    img {
-      max-width: 300px;
-      width: 100%;
-      height: auto;
-    }
-    .info {
-      font-size: 13px;
-      color: #888;
-      margin-top: 1rem;
-    }
-    .links {
-      margin-top: 2rem;
-      display: flex;
-      gap: 1rem;
-      justify-content: center;
-      flex-wrap: wrap;
-    }
+    img { max-width: 300px; width: 100%; height: auto; }
+    .info { font-size: 13px; color: #888; margin-top: 1rem; }
+    .links { margin-top: 2rem; display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
     a {
-      padding: 8px 16px;
-      background: #FFC72C;
-      color: #111;
-      text-decoration: none;
-      border-radius: 4px;
-      font-weight: 600;
-      font-size: 12px;
-      transition: all 0.2s;
+      padding: 8px 16px; background: #FFC72C; color: #111;
+      text-decoration: none; border-radius: 4px;
+      font-weight: 600; font-size: 12px; transition: all 0.2s;
     }
-    a:hover {
-      background: #FFE166;
-      transform: translateY(-2px);
-    }
+    a:hover { background: #FFE166; transform: translateY(-2px); }
+    .spinner { font-size: 2rem; animation: spin 1s linear infinite; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -186,52 +167,79 @@ app.get("/", (req, res) => {
     <div class="status">
       <strong>Status:</strong> <span id="status">Carregando...</span>
     </div>
-    
-    <div class="qr-container">
-      <img id="qrImage" src="/api/qr" alt="QR Code">
+    <div class="qr-container" id="qrContainer">
+      <div class="spinner">⏳</div>
     </div>
-    
-    <p class="info">Escaneie o QR Code com seu WhatsApp para autenticar o bot.</p>
-    <p class="info">O QR Code é atualizado a cada 3 segundos.</p>
-    
+    <p class="info" id="qrInfo">Aguardando geração do QR Code...</p>
     <div class="links">
       <a href="/painel.html">📊 Painel de Controle</a>
     </div>
   </div>
-
   <script>
-    // Atualiza QR code a cada 3 segundos
-    setInterval(() => {
-      document.getElementById('qrImage').src = '/api/qr?t=' + Date.now();
-    }, 3000);
+    let lastQRTimestamp = 0;
+    
+    function updateQR() {
+      fetch('/api/qr-status')
+        .then(r => r.json())
+        .then(d => {
+          if (d.available && d.timestamp !== lastQRTimestamp) {
+            lastQRTimestamp = d.timestamp;
+            const img = document.createElement('img');
+            img.src = '/api/qr?t=' + Date.now();
+            img.alt = 'QR Code';
+            img.onerror = () => {
+              document.getElementById('qrInfo').textContent = 'Aguardando QR Code...';
+            };
+            document.getElementById('qrContainer').innerHTML = '';
+            document.getElementById('qrContainer').appendChild(img);
+            document.getElementById('qrInfo').textContent = 'Escaneie com seu WhatsApp para autenticar o bot.';
+          } else if (!d.available) {
+            document.getElementById('qrContainer').innerHTML = '<div style="padding:1rem;color:#888">' + (d.message || 'Aguardando...') + '</div>';
+          }
+        })
+        .catch(() => {});
+    }
 
-    // Verifica status do bot
-    setInterval(() => {
+    function updateStatus() {
       fetch('/api/status')
         .then(r => r.json())
         .then(d => {
-          document.getElementById('status').textContent = d.status;
-          document.getElementById('status').style.color = d.status === 'Online' ? '#4ade80' : '#f87171';
+          const el = document.getElementById('status');
+          el.textContent = d.status;
+          el.style.color = d.status === 'Online' ? '#4ade80' : d.status === 'Inicializando' ? '#FFC72C' : '#f87171';
         })
         .catch(() => {
           document.getElementById('status').textContent = 'Offline';
           document.getElementById('status').style.color = '#f87171';
         });
-    }, 5000);
+    }
+
+    updateQR(); updateStatus();
+    setInterval(updateQR, 3000);
+    setInterval(updateStatus, 5000);
   </script>
 </body>
 </html>`);
 });
 
+// BUG FIX #6: rota /api/qr-status separada para evitar erro 400 quando QR não existe
+app.get("/api/qr-status", (req, res) => {
+  if (!currentQR) {
+    return res.json({ available: false, message: botStatus });
+  }
+  res.json({ available: true, timestamp: Date.now() });
+});
+
 // API para retornar o QR code como imagem
 app.get("/api/qr", async (req, res) => {
   if (!currentQR) {
-    return res.status(400).json({ error: "QR Code não gerado ainda" });
+    return res.status(404).json({ error: "QR Code não disponível ainda" });
   }
   try {
-    const qrImage = await qrcodeImage.toDataURL(currentQR, { width: 300 });
-    const base64Data = qrImage.replace(/^data:image\/png;base64,/, "");
+    const qrDataURL = await qrcodeImage.toDataURL(currentQR, { width: 300 });
+    const base64Data = qrDataURL.replace(/^data:image\/png;base64,/, "");
     res.set("Content-Type", "image/png");
+    res.set("Cache-Control", "no-store");
     res.send(Buffer.from(base64Data, "base64"));
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -240,25 +248,60 @@ app.get("/api/qr", async (req, res) => {
 
 // API para status do bot
 app.get("/api/status", (req, res) => {
-  const status = client && client.info ? "Online" : "Offline";
-  res.json({ status });
+  const isOnline = client && client.info;
+  res.json({
+    status: isOnline ? "Online" : botStatus,
+    uptime: process.uptime(),
+    reconnectAttempts,
+    lastError: lastError ? lastError.message : null,
+  });
 });
 
-// Health check para manter o container vivo (Railway, Fly.io, Render, etc.)
+// Health check para manter o container vivo
 app.get("/health", (req, res) => {
   res.status(200).json({ ok: true, uptime: process.uptime() });
 });
 
+// BUG FIX #7: API de logs para o painel funcionar corretamente
+app.get("/api/logs", (req, res) => {
+  try {
+    if (!fs.existsSync(LOG_FILE)) return res.json([]);
+    const logs = JSON.parse(fs.readFileSync(LOG_FILE, "utf8"));
+    res.json(logs.slice(0, 100));
+  } catch {
+    res.json([]);
+  }
+});
+
+// BUG FIX #8: API de estatísticas para o painel
+app.get("/api/stats", (req, res) => {
+  try {
+    if (!fs.existsSync(SESSIONS_FILE)) return res.json({});
+    const data = JSON.parse(fs.readFileSync(SESSIONS_FILE, "utf8"));
+    res.json(data);
+  } catch {
+    res.json({});
+  }
+});
+
+// BUG FIX #9: API de propostas para o painel
+app.get("/api/proposals", (req, res) => {
+  try {
+    if (!fs.existsSync(PROPOSALS_FILE)) return res.json([]);
+    const data = JSON.parse(fs.readFileSync(PROPOSALS_FILE, "utf8"));
+    res.json(data);
+  } catch {
+    res.json([]);
+  }
+});
+
 // --- INIT ---
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: GEMINI_MODEL }); // Flash = mais barato/rápido
+const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
-// Histórico de conversas por número (contexto)
 const conversations = new Map();
-// --- MENU ---
 const menuState = new Map();
 
-// Stats para o painel
 let stats = {
   totalMessages: 0,
   totalContacts: new Set(),
@@ -269,24 +312,24 @@ let stats = {
 
 // --- HELPERS ---
 function log(type, message, extra = {}) {
-  const entry = {
-    time: new Date().toISOString(),
-    type,
-    message,
-    ...extra,
-  };
+  const entry = { time: new Date().toISOString(), type, message, ...extra };
   console.log(`[${entry.time}] [${type}] ${message}`);
 
-  // Salva no arquivo de log
+  // BUG FIX #10: escrita atômica no log para evitar corrupção de JSON
   let logs = [];
-  if (fs.existsSync(LOG_FILE)) {
-    try {
+  try {
+    if (fs.existsSync(LOG_FILE)) {
       logs = JSON.parse(fs.readFileSync(LOG_FILE, "utf8"));
-    } catch {}
+    }
+  } catch {
+    logs = [];
   }
   logs.unshift(entry);
-  if (logs.length > 500) logs = logs.slice(0, 500); // Máximo 500 logs
-  fs.writeFileSync(LOG_FILE, JSON.stringify(logs, null, 2));
+  if (logs.length > 500) logs = logs.slice(0, 500);
+  try {
+    fs.writeFileSync(LOG_FILE + ".tmp", JSON.stringify(logs, null, 2));
+    fs.renameSync(LOG_FILE + ".tmp", LOG_FILE);
+  } catch {}
 }
 
 function saveStats() {
@@ -295,20 +338,23 @@ function saveStats() {
     totalContacts: Array.from(stats.totalContacts),
     uptime: Math.floor((Date.now() - new Date(stats.startTime)) / 1000),
   };
-  fs.writeFileSync(SESSIONS_FILE, JSON.stringify(statsToSave, null, 2));
+  try {
+    fs.writeFileSync(SESSIONS_FILE + ".tmp", JSON.stringify(statsToSave, null, 2));
+    fs.renameSync(SESSIONS_FILE + ".tmp", SESSIONS_FILE);
+  } catch {}
 }
 
 function saveProposal(userNumber, userName) {
   let proposals = [];
-  if (fs.existsSync(PROPOSALS_FILE)) {
-    try {
+  try {
+    if (fs.existsSync(PROPOSALS_FILE)) {
       proposals = JSON.parse(fs.readFileSync(PROPOSALS_FILE, "utf8"));
-    } catch {}
+    }
+  } catch {
+    proposals = [];
   }
 
-  // Verifica se o cliente já solicitou proposta
-  const existingIndex = proposals.findIndex(p => p.number === userNumber);
-  
+  const existingIndex = proposals.findIndex((p) => p.number === userNumber);
   const proposal = {
     name: userName,
     number: userNumber.replace("@c.us", ""),
@@ -316,16 +362,17 @@ function saveProposal(userNumber, userName) {
   };
 
   if (existingIndex !== -1) {
-    // Atualiza a data da última solicitação
     proposals[existingIndex].requestedAt = proposal.requestedAt;
   } else {
-    // Adiciona novo cliente
     proposals.unshift(proposal);
-    if (proposals.length > 100) proposals = proposals.slice(0, 100); // Máximo 100 propostas
+    if (proposals.length > 100) proposals = proposals.slice(0, 100);
   }
 
-  fs.writeFileSync(PROPOSALS_FILE, JSON.stringify(proposals, null, 2));
-  log("INFO", `Proposta registrada de ${userName} (${userNumber})`);
+  try {
+    fs.writeFileSync(PROPOSALS_FILE + ".tmp", JSON.stringify(proposals, null, 2));
+    fs.renameSync(PROPOSALS_FILE + ".tmp", PROPOSALS_FILE);
+    log("INFO", `Proposta registrada de ${userName} (${userNumber})`);
+  } catch {}
 }
 
 function getHourKey() {
@@ -347,64 +394,25 @@ Sou o DuckBot, seu assistente virtual. Estou aqui para ajudar com:
 Ou pode me fazer qualquer pergunta técnica! Como posso ajudar? 😊`;
 
 const SERVICES = [
-  {
-    title: "Code Review & Arquitetura",
-    desc: "Análise profunda de código, refactoring e boas práticas.",
-  },
-  {
-    title: "Otimização de Performance",
-    desc: "Identificação de gargalos, profiling e escalabilidade.",
-  },
-  {
-    title: "Análise de Sistemas",
-    desc: "Mapeamento, documentação e melhoria de processos.",
-  },
-  {
-    title: "Auditoria de Segurança",
-    desc: "Revisão de autenticação, autorização e proteção de dados.",
-  },
-  {
-    title: "Consultoria Técnica",
-    desc: "Decisões de stack, estratégia e planejamento.",
-  },
-  {
-    title: "Desenvolvimento Web/Mobile",
-    desc: "Criação de aplicações web e mobile modernas e escaláveis.",
-  },
+  { title: "Code Review & Arquitetura", desc: "Análise profunda de código, refactoring e boas práticas." },
+  { title: "Otimização de Performance", desc: "Identificação de gargalos, profiling e escalabilidade." },
+  { title: "Análise de Sistemas", desc: "Mapeamento, documentação e melhoria de processos." },
+  { title: "Auditoria de Segurança", desc: "Revisão de autenticação, autorização e proteção de dados." },
+  { title: "Consultoria Técnica", desc: "Decisões de stack, estratégia e planejamento." },
+  { title: "Desenvolvimento Web/Mobile", desc: "Criação de aplicações web e mobile modernas e escaláveis." },
 ];
 
 const PROJECTS = [
-  {
-    title: "Vidraçaria Lucas",
-    desc: "Sistema de pedidos e orçamentos com fluxo simplificado.",
-  },
-  {
-    title: "Karaokê Manager",
-    desc: "Gestão de filas, músicas e apresentações.",
-  },
-  {
-    title: "QR Menu",
-    desc: "Cardápio digital via QR Code para restaurantes.",
-  },
-  {
-    title: "Dashboard de Monitoramento",
-    desc: "Visualização de métricas e alertas operacionais.",
-  },
-  {
-    title: "Otimização Web",
-    desc: "Performance e escalabilidade em apps web.",
-  },
-  {
-    title: "Sistema de Auth",
-    desc: "JWT, OAuth e controle de acesso.",
-  },
+  { title: "Vidraçaria Lucas", desc: "Sistema de pedidos e orçamentos com fluxo simplificado." },
+  { title: "Karaokê Manager", desc: "Gestão de filas, músicas e apresentações." },
+  { title: "QR Menu", desc: "Cardápio digital via QR Code para restaurantes." },
+  { title: "Dashboard de Monitoramento", desc: "Visualização de métricas e alertas operacionais." },
+  { title: "Otimização Web", desc: "Performance e escalabilidade em apps web." },
+  { title: "Sistema de Auth", desc: "JWT, OAuth e controle de acesso." },
 ];
 
 function setMenuState(userNumber, state) {
-  if (!state) {
-    menuState.delete(userNumber);
-    return;
-  }
+  if (!state) { menuState.delete(userNumber); return; }
   menuState.set(userNumber, state);
 }
 
@@ -414,61 +422,48 @@ function getMenuState(userNumber) {
 
 function renderServicesMenu() {
   const lines = SERVICES.map((s, i) => `${KEYCAPS[i + 1]} *${s.title}*`);
-  return `🛠️ *Nossos Serviços (escolha um número):*
-
-${lines.join("\n")}
-
-${KEYCAPS[0]} *Menu principal*`;
+  return `🛠️ *Nossos Serviços (escolha um número):*\n\n${lines.join("\n")}\n\n${KEYCAPS[0]} *Menu principal*`;
 }
 
 function renderProjectsMenu() {
   const lines = PROJECTS.map((p, i) => `${KEYCAPS[i + 1]} *${p.title}*`);
-  return `💼 *Cases Realizados (escolha um número):*
-
-${lines.join("\n")}
-
-${KEYCAPS[0]} *Menu principal*`;
+  return `💼 *Cases Realizados (escolha um número):*\n\n${lines.join("\n")}\n\n${KEYCAPS[0]} *Menu principal*`;
 }
 
 // --- GEMINI ---
 async function askGemini(userNumber, userName, userMessage) {
   try {
-    // Pega ou cria histórico do usuário
     if (!conversations.has(userNumber)) {
       conversations.set(userNumber, []);
     }
     const history = conversations.get(userNumber);
-
-    // --- MENSAGENS ---
     const recentHistory = history.slice(-10);
     const historyText = recentHistory
       .map((h) => `${h.role === "user" ? "Cliente" : "DuckBot"}: ${h.content}`)
       .join("\n");
 
-    const prompt = `${SYSTEM_PROMPT}
+    const prompt = `${SYSTEM_PROMPT}\n\n${historyText ? `HISTÓRICO RECENTE DA CONVERSA:\n${historyText}\n` : ""}NOVA MENSAGEM de ${userName || "Cliente"}: ${userMessage}\n\nResponda como DuckBot:`;
 
-${historyText ? `HISTÓRICO RECENTE DA CONVERSA:\n${historyText}\n` : ""}
-NOVA MENSAGEM de ${userName || "Cliente"}: ${userMessage}
-
-Responda como DuckBot:`;
-
-    const result = await model.generateContent(prompt);
+    // BUG FIX #11: timeout explícito na chamada ao Gemini
+    const result = await Promise.race([
+      model.generateContent(prompt),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
+    ]);
     const response = result.response.text();
 
-    // Salva no histórico
     history.push({ role: "user", content: userMessage });
     history.push({ role: "assistant", content: response });
-
-    // --- MENSAGENS ---
     if (history.length > 20) {
       conversations.set(userNumber, history.slice(-20));
     }
-
     return response;
   } catch (error) {
     log("ERROR", `Gemini error: ${error.message}`);
-    if (error.message.includes("quota")) {
+    if (error.message.includes("quota") || error.message.includes("429")) {
       return "🦆 Estou com muitas conversas agora! Tente novamente em alguns minutos ou entre em contato pelo email contato@duckdebug.com";
+    }
+    if (error.message.includes("timeout")) {
+      return "🦆 Demorei demais para pensar! Pode repetir a pergunta? 🙏";
     }
     return "🦆 Ops! Tive um probleminha técnico. Nossa equipe foi notificada. Você pode nos contatar pelo email contato@duckdebug.com";
   }
@@ -500,8 +495,7 @@ function getQuickReply(userNumber, userName, message) {
     }
   }
 
-  // Respostas instantâneas para comandos simples (sem gastar API)
-  if (msg === "oi" || msg === "olá" || msg === "ola" || msg === "hello" || msg === "hi") {
+  if (msg === "oi" || msg === "olá" || msg === "ola" || msg === "hello" || msg === "hi" || msg === "bom dia" || msg === "boa tarde" || msg === "boa noite") {
     return MAIN_MENU;
   }
 
@@ -516,7 +510,6 @@ function getQuickReply(userNumber, userName, message) {
   }
 
   if (msg === "3" || msg === "orçamento" || msg === "orcamento" || msg === "orçar") {
-    // Registra a solicitação de orçamento
     saveProposal(userNumber, userName);
     return `💰 *Solicitar Orçamento*\n\nPara te dar uma proposta precisa, preciso de algumas informações:\n\n1. Qual é o projeto/problema?\n2. Qual tecnologia você usa (ou quer usar)?\n3. Tem prazo em mente?\n\nMe conte mais detalhes aqui ou envie um email para:\n📧 contato@duckdebug.com\n\nNossa equipe responde em até 1 dia útil! 🦆`;
   }
@@ -529,39 +522,58 @@ function getQuickReply(userNumber, userName, message) {
     return `🦆 Foi um prazer ajudar! Se precisar de mais alguma coisa, é só chamar.\n\n*Duck Debug* — Explique o problema. Encontre a solução.\n📧 contato@duckdebug.com`;
   }
 
-  return null; // Vai para o Gemini
+  return null;
 }
 
 // --- WHATSAPP CLIENT FACTORY ---
 function createClient() {
+  const puppeteerArgs = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-accelerated-2d-canvas",
+    "--no-first-run",
+    "--no-zygote",
+    "--single-process",
+    "--disable-gpu",
+    // BUG FIX #12: argumentos extras para estabilidade em containers free tier
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-sync",
+    "--disable-translate",
+    "--hide-scrollbars",
+    "--metrics-recording-only",
+    "--mute-audio",
+    "--safebrowsing-disable-auto-update",
+  ];
+
   const newClient = new Client({
     authStrategy: new LocalAuth({ dataPath: "./.wwebjs_auth" }),
     puppeteer: {
       headless: true,
       ...(chromeExecutablePath ? { executablePath: chromeExecutablePath } : {}),
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-accelerated-2d-canvas",
-        "--no-first-run",
-        "--no-zygote",
-        "--single-process",
-        "--disable-gpu",
-      ],
+      args: puppeteerArgs,
       timeout: RECONNECT_CONFIG.puppeteerTimeout,
+    },
+    // BUG FIX #13: webVersionCache para evitar re-download a cada restart
+    webVersionCache: {
+      type: "local",
+      path: "./.wwebjs_cache",
     },
   });
 
-  // QR Code
   newClient.on("qr", (qr) => {
-    currentQR = qr; // Armazena para servir via HTTP
+    currentQR = qr;
+    botStatus = "Aguardando QR";
     console.log("\n[QR] Escaneie o QR Code no WhatsApp\n");
+    qrcode.generate(qr, { small: true });
     log("INFO", "QR Code gerado — aguardando escaneamento");
-    reconnectAttempts = 0; // Reset tentativas ao gerar novo QR
+    reconnectAttempts = 0;
   });
 
   newClient.on("ready", () => {
+    currentQR = null;
+    botStatus = "Online";
     console.log("\n✅ DuckBot está ONLINE e pronto para atender!\n");
     log("INFO", "Bot iniciado com sucesso");
     reconnectAttempts = 0;
@@ -569,40 +581,47 @@ function createClient() {
   });
 
   newClient.on("authenticated", () => {
+    botStatus = "Autenticado";
     log("INFO", "WhatsApp autenticado com sucesso");
   });
 
   newClient.on("auth_failure", (msg) => {
+    botStatus = "Falha de autenticação";
     log("ERROR", `Falha na autenticação: ${msg}`);
+    // BUG FIX #14: limpa sessão imediatamente após falha de auth (não esperar 3 tentativas)
+    const authPath = path.join(__dirname, ".wwebjs_auth");
+    try {
+      if (fs.existsSync(authPath)) fs.rmSync(authPath, { recursive: true, force: true });
+    } catch {}
+    scheduleReconnection();
   });
 
   newClient.on("disconnected", (reason) => {
+    botStatus = "Desconectado";
     log("WARN", `Bot desconectado: ${reason}`);
     scheduleReconnection();
   });
 
-  // Captura erros não tratados
   newClient.on("error", (error) => {
     lastError = error;
     log("ERROR", `Erro do cliente: ${error.message}`);
-    scheduleReconnection();
   });
 
   // --- MESSAGE HANDLER ---
   newClient.on("message", async (message) => {
-    // Ignora grupos e status
     if (message.from.includes("@g.us")) return;
     if (message.from === "status@broadcast") return;
     if (message.fromMe) return;
+    // BUG FIX #15: ignora mensagens sem corpo (stickers, mídia sem caption, etc.)
+    if (!message.body || message.body.trim() === "") return;
 
-    const contact = await message.getContact();
-    const userName = contact.pushname || contact.name || "Cliente";
+    const contact = await message.getContact().catch(() => null);
+    const userName = contact?.pushname || contact?.name || "Cliente";
     const userNumber = message.from;
     const userMessage = message.body;
 
     log("MSG", `Nova mensagem de ${userName} (${userNumber}): ${userMessage.substring(0, 50)}`);
 
-    // Atualiza stats
     stats.totalMessages++;
     stats.totalContacts.add(userNumber);
     const hourKey = getHourKey();
@@ -617,17 +636,13 @@ function createClient() {
     saveStats();
 
     try {
-      // Indicador de digitando
       await newClient.sendPresenceAvailable();
-
-      // Tenta resposta rápida primeiro
       const quickReply = getQuickReply(userNumber, userName, userMessage);
 
       if (quickReply) {
         await message.reply(quickReply);
         log("INFO", `Resposta rápida enviada para ${userName}`);
       } else {
-        // --- GEMINI ---
         const aiResponse = await askGemini(userNumber, userName, userMessage);
         await message.reply(aiResponse);
         log("INFO", `Resposta Gemini enviada para ${userName}`);
@@ -635,9 +650,7 @@ function createClient() {
     } catch (error) {
       log("ERROR", `Erro ao responder ${userName}: ${error.message}`);
       try {
-        await message.reply(
-          "🦆 Tive um probleminha técnico! Entre em contato pelo email contato@duckdebug.com"
-        );
+        await message.reply("🦆 Tive um probleminha técnico! Entre em contato pelo email contato@duckdebug.com");
       } catch {}
     }
   });
@@ -652,6 +665,7 @@ function scheduleReconnection() {
   if (reconnectionTimeout) clearTimeout(reconnectionTimeout);
 
   reconnectAttempts++;
+  botStatus = `Reconectando (tentativa ${reconnectAttempts})`;
 
   const delay = Math.min(
     RECONNECT_CONFIG.initialDelay * Math.pow(RECONNECT_CONFIG.backoffMultiplier, reconnectAttempts - 1),
@@ -667,20 +681,18 @@ function scheduleReconnection() {
 
 // --- INITIALIZE CLIENT ---
 async function initializeClient() {
+  botStatus = "Inicializando";
   try {
     if (client) {
-      try {
-        await client.destroy();
-      } catch {}
+      try { await client.destroy(); } catch {}
+      client = null;
     }
 
-    // Limpa sessão corrompida
+    // BUG FIX #16: limpa sessão após MAIS de 5 falhas (não 2 — evita loop de re-auth desnecessária)
     const authPath = path.join(__dirname, ".wwebjs_auth");
-    if (reconnectAttempts > 2 && fs.existsSync(authPath)) {
-      log("WARN", "Limpando sessão local due a múltiplas tentativas de falha");
-      try {
-        fs.rmSync(authPath, { recursive: true, force: true });
-      } catch {}
+    if (reconnectAttempts > 5 && fs.existsSync(authPath)) {
+      log("WARN", "Limpando sessão local após múltiplas falhas");
+      try { fs.rmSync(authPath, { recursive: true, force: true }); } catch {}
     }
 
     client = createClient();
@@ -697,43 +709,40 @@ async function initializeClient() {
 console.log("\n🦆 DUCK DEBUG BOT — Iniciando...\n");
 log("INFO", `Versão do Node.js: ${process.version}`);
 log("INFO", `Plataforma: ${process.platform}`);
+log("INFO", `Modelo Gemini: ${GEMINI_MODEL}`);
+log("INFO", `Chrome path: ${chromeExecutablePath || "auto-detect"}`);
 
-// Inicia servidor HTTP PRIMEIRO (antes do bot WhatsApp)
-// Escuta em 0.0.0.0 para funcionar corretamente no Fly.io
 const server = app.listen(PORT, "0.0.0.0", () => {
   log("INFO", `Servidor web rodando em 0.0.0.0:${PORT}`);
-  console.log(`📱 Acesse: https://duckbot.fly.dev para ver o QR Code\n`);
-  
-  // Agora tenta inicializar o bot WhatsApp em background
+  const appUrl = process.env.APP_URL || `http://localhost:${PORT}`;
+  console.log(`📱 Acesse: ${appUrl} para ver o QR Code\n`);
+
   initializeClient().catch((error) => {
     log("ERROR", `Erro ao inicializar cliente: ${error.message}`);
   });
 });
 
-// Keep-alive: previne que plataformas free tier adormeçam o container
-// Fly.io já tem auto_stop_machines = 'off', mas o ping garante que o processo está saudável
+// Keep-alive ping
 const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
 setInterval(() => {
-  const url = new URL("/health", APP_URL);
-  const transport = url.protocol === "https:" ? https : http;
-  const req = transport.get(url.toString(), (res) => { res.resume(); });
-  req.on("error", (err) => {
-    log("WARN", `Keep-alive ping falhou: ${err.message}`);
-  });
+  try {
+    const url = new URL("/health", APP_URL);
+    const transport = url.protocol === "https:" ? https : http;
+    const req = transport.get(url.toString(), (res) => { res.resume(); });
+    req.on("error", (err) => { log("WARN", `Keep-alive ping falhou: ${err.message}`); });
+  } catch {}
 }, 14 * 60 * 1000);
 
-// Trata erros do servidor
 server.on("error", (error) => {
   log("ERROR", `Erro do servidor: ${error.message}`);
-  // Só sai se a porta já estiver em uso (erro irrecuperável)
-  if (error.code === "EADDRINUSE") {
-    process.exit(1);
-  }
+  if (error.code === "EADDRINUSE") process.exit(1);
 });
 
-// Graceful shutdown (Ctrl+C)
-process.on("SIGINT", () => {
-  log("INFO", "Bot encerrado pelo usuário");
+process.on("SIGINT", gracefulShutdown);
+process.on("SIGTERM", gracefulShutdown);
+
+function gracefulShutdown() {
+  log("INFO", "Bot encerrando graciosamente...");
   if (reconnectionTimeout) clearTimeout(reconnectionTimeout);
   saveStats();
   if (client) {
@@ -741,40 +750,15 @@ process.on("SIGINT", () => {
   } else {
     process.exit(0);
   }
-});
+}
 
-// Graceful shutdown em containers Docker/Railway/Fly.io
-process.on("SIGTERM", () => {
-  log("INFO", "Bot recebeu SIGTERM — encerrando graciosamente");
-  if (reconnectionTimeout) clearTimeout(reconnectionTimeout);
-  saveStats();
-  if (client) {
-    client.destroy().finally(() => process.exit(0));
-  } else {
-    process.exit(0);
-  }
-});
-
-// Tratamento de erros não capturados
-process.on("unhandledRejection", (reason, promise) => {
+process.on("unhandledRejection", (reason) => {
   log("ERROR", `Promise rejeitada não tratada: ${reason}`);
 });
 
 process.on("uncaughtException", (error) => {
   log("ERROR", `Exceção não capturada: ${error.message}`);
   lastError = error;
-  if (client) {
-    client.destroy().catch(() => {});
-    client = null;
-  }
-  // Reagenda reconexão para manter o bot 24/7
+  if (client) { client.destroy().catch(() => {}); client = null; }
   scheduleReconnection();
 });
-
-
-
-
-
-
-
-

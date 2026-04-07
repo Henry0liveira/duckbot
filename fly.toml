@@ -1,12 +1,13 @@
-# fly.toml app configuration file generated for duckbot on 2026-04-06T19:01:26Z
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
+# fly.toml — DuckBot no Fly.io
+# Documentação: https://fly.io/docs/reference/configuration/
 
 app = 'duckbot'
-primary_region = 'iad'
+primary_region = 'gru'  # São Paulo — menor latência para BR
 
 [build]
+
+[env]
+  PORT = "3000"
 
 [http_service]
   internal_port = 3000
@@ -16,8 +17,24 @@ primary_region = 'iad'
   min_machines_running = 1
   processes = ['app']
 
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 25
+    soft_limit = 20
+
 [[vm]]
   memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 1024
+
+# Volume persistente para salvar a sessão do WhatsApp
+# (sem isso, você precisa escanear QR a cada deploy)
+[[mounts]]
+  source = "duckbot_data"
+  destination = "/app/.wwebjs_auth"
+  initial_size = "1gb"
+
+[[mounts]]
+  source = "duckbot_cache"
+  destination = "/app/.wwebjs_cache"
+  initial_size = "512mb"
